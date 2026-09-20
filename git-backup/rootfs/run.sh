@@ -239,65 +239,67 @@ setup_repository() {
 # ------------------------------------------------------------------------------
 generate_gitignore() {
     cat > "$REPO_DIR/.gitignore" << 'EOF'
-# Home Assistant Git Backup - Auto-generated .gitignore
+# Home Assistant -> ChatGPT diagnostic mirror
+# Deliberately curated: configuration text only, no credentials or runtime data.
 
-# Database files
+# Sensitive Home Assistant data
+secrets.yaml
+.storage/
+.cloud/
+zigbee2mqtt/
+*.json
+
+# Databases, logs, caches and backups
 *.db
 *.db-shm
 *.db-wal
-
-# Log files
 *.log
 home-assistant.log*
 OZW_Log.txt
-
-# Cache and temporary files
-__pycache__/
-*.py[cod]
 .cache/
-*.tmp
-
-# Backups
+__pycache__/
+tts/
 backups/
 backup/
+deps/
+.ha_run.lock
 
-# TTS cache
-tts/
+# Installed third-party code and frontend assets.
+# Their small name/version inventory is exported in debug/states.yaml instead.
+custom_components/
+www/
+themes/
 
-# Cloud connection data
-.cloud/
-
-# Storage - exclude all except lovelace dashboards and core.config
-.storage/*
-!.storage/lovelace*
-!.storage/core.config
-
-# Node-RED credentials
-flows_cred.json
-
-# ESPHome secrets
+# ESPHome private/generated data
 esphome/secrets.yaml
+esphome/archive/
+esphome/.device-builder-peer-link-key.bin
+esphome/.device-builder.json.lock
+esphome/.gitignore
 
-# Large media files
+# Media / binary assets
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
 *.mp4
 *.mp3
 *.wav
 *.avi
 *.mkv
 
-# IDE files
+# Editor / OS noise
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS files
 .DS_Store
 Thumbs.db
 EOF
 
-    # Add user-defined exclude patterns
+    # Add user-defined exclusions too (defense in depth)
     echo "" >> "$REPO_DIR/.gitignore"
     echo "# User-defined exclude patterns" >> "$REPO_DIR/.gitignore"
     while IFS= read -r pattern; do
@@ -388,6 +390,43 @@ generate_file_summary() {
 }
 
 # ------------------------------------------------------------------------------
+# Remove files that were tracked by older, broader backup versions
+# ------------------------------------------------------------------------------
+cleanup_repo_noise() {
+    # These directories are either third-party code, generated frontend assets,
+    # runtime caches, or sensitive stores. They are not needed for diagnostics.
+    rm -rf \
+        "$REPO_DIR/custom_components" \
+        "$REPO_DIR/www" \
+        "$REPO_DIR/themes" \
+        "$REPO_DIR/deps" \
+        "$REPO_DIR/.storage" \
+        "$REPO_DIR/.cache" \
+        "$REPO_DIR/.cloud" \
+        "$REPO_DIR/zigbee2mqtt" \
+        "$REPO_DIR/backups" \
+        "$REPO_DIR/backup" \
+        "$REPO_DIR/tts" \
+        "$REPO_DIR/esphome/archive"
+
+    rm -f \
+        "$REPO_DIR/secrets.yaml" \
+        "$REPO_DIR/.ha_run.lock" \
+        "$REPO_DIR/esphome/secrets.yaml" \
+        "$REPO_DIR/esphome/.device-builder-peer-link-key.bin" \
+        "$REPO_DIR/esphome/.device-builder.json.lock" \
+        "$REPO_DIR/esphome/.gitignore"
+
+    # Remove old media/binary/runtime files that may already exist in Git,
+    # without ever traversing the repository's own .git directory.
+    find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type f \
+        \( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' -o -name '*.gif' \
+           -o -name '*.webp' -o -name '*.mp4' -o -name '*.mp3' -o -name '*.wav' \
+           -o -name '*.avi' -o -name '*.mkv' -o -name '*.db' -o -name '*.log' \
+           -o -name '*.json' \) -delete 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------------------
 # Sync and Commit
 # ------------------------------------------------------------------------------
 do_backup() {
@@ -401,42 +440,73 @@ do_backup() {
     # Sync configuration files using rsync
     log_info "Syncing configuration from $HA_CONFIG..."
 
- # Build rsync arguments
- RSYNC_ARGS=(
-    -av
-    --delete
-    --exclude='.git/'
-    --exclude='*.db'
-    --exclude='*.db-shm'
-    --exclude='*.db-wal'
-    --exclude='*.log'
-    --exclude='home-assistant.log*'
-    --exclude='tts/'
-    --exclude='backups/'
-    --exclude='.cloud/'
-    --exclude='__pycache__/'
-    --exclude='OZW_Log.txt'
-    --exclude='secrets.yaml'
-    --exclude='.storage/'
-    --exclude='zigbee2mqtt/'
-    --exclude='esphome/secrets.yaml'
-    --exclude='*.json'
-    --exclude='.cache/'
-    --exclude='esphome/.device-builder-peer-link-key.bin'
-    --exclude='esphome/.device-builder.json.lock'
-    --exclude='esphome/archive/'
-    --exclude='www/tmp*.jpg'
-)
+    # Curated mirror: keep only text configuration/source files that are useful
+    # for diagnostics. Large installed integrations and frontend assets stay out.
+    RSYNC_ARGS=(
+        -av
+        --delete
+        --prune-empty-dirs
+        --exclude='.git/'
 
-    # Apply user-defined exclusions from add-on configuration
+        # Sensitive / runtime / bulky directories
+        --exclude='secrets.yaml'
+        --exclude='.storage/'
+        --exclude='zigbee2mqtt/'
+        --exclude='.cache/'
+        --exclude='.cloud/'
+        --exclude='backups/'
+        --exclude='backup/'
+        --exclude='tts/'
+        --exclude='deps/'
+        --exclude='custom_components/'
+        --exclude='www/'
+        --exclude='themes/'
+
+        # ESPHome private/generated files
+        --exclude='esphome/secrets.yaml'
+        --exclude='esphome/archive/'
+        --exclude='esphome/.device-builder-peer-link-key.bin'
+        --exclude='esphome/.device-builder.json.lock'
+        --exclude='esphome/.gitignore'
+
+        # Databases/logs/JSON/runtime
+        --exclude='*.db'
+        --exclude='*.db-shm'
+        --exclude='*.db-wal'
+        --exclude='*.log'
+        --exclude='home-assistant.log*'
+        --exclude='OZW_Log.txt'
+        --exclude='*.json'
+        --exclude='.ha_run.lock'
+    )
+
+    # User exclusions must come before allow rules so they always win.
     while IFS= read -r pattern; do
         [ -n "$pattern" ] && RSYNC_ARGS+=(--exclude="$pattern")
     done < <(get_config_array "exclude_patterns")
+
+    # Files ChatGPT actually needs to diagnose HA configuration.
+    RSYNC_ARGS+=(
+        --include='*/'
+        --include='.HA_VERSION'
+        --include='*.yaml'
+        --include='*.yml'
+        --include='*.py'
+        --include='*.jinja'
+        --include='*.j2'
+        --include='*.sh'
+        --include='*.conf'
+        --include='*.toml'
+        --exclude='*'
+    )
 
     rsync "${RSYNC_ARGS[@]}" \
         "$HA_CONFIG/" "$REPO_DIR/" 2>/dev/null || {
             log_warn "rsync had warnings, continuing..."
         }
+
+    # Purge files left over from the old broad mirror.
+    cleanup_repo_noise
 
     # Generate/update .gitignore after rsync so --delete cannot remove it
     generate_gitignore
