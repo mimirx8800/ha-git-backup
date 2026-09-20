@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+export HOME="${HOME:-/root}"
 
 # ==============================================================================
 # Home Assistant Add-on: Git Config Backup
