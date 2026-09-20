@@ -65,12 +65,15 @@ BRANCH=$(get_config "branch" "main")
 USERNAME=$(get_config "username" "")
 PASSWORD=$(get_config "password" "")
 SSH_KEY=$(get_config "ssh_key" "")
-AUTO_GENERATE_SSH_KEY=$(get_config "auto_generate_ssh_key" "true")
+AUTO_GENERATE_SSH_KEY=$(get_config "auto_generate_ssh_key" "false")
 COMMIT_MESSAGE=$(get_config "commit_message" "Backup: {files}")
 COMMIT_USER_NAME=$(get_config "commit_user_name" "Home Assistant")
 COMMIT_USER_EMAIL=$(get_config "commit_user_email" "homeassistant@local")
 BACKUP_INTERVAL=$(get_config "backup_interval_hours" "24")
-BACKUP_ON_START=$(get_config "backup_on_start" "true")
+BACKUP_ON_START=$(get_config "backup_on_start" "false")
+# This optimized mirror deliberately uses scheduled/manual backups only.
+# Avoid duplicate state-only commits every time Home Assistant restarts.
+BACKUP_ON_START="false"
 WATCH_REALTIME=$(get_config "watch_realtime" "false")
 WATCH_MIN_INTERVAL=$(get_config "watch_min_interval" "30")
 WATCH_MAX_INTERVAL=$(get_config "watch_max_interval" "1800")
@@ -81,6 +84,11 @@ CRON_SCHEDULE=$(get_config "cron_schedule" "")
 # SSH Key Management
 # ------------------------------------------------------------------------------
 setup_ssh_key() {
+    if [[ "$REPOSITORY_URL" == https://* ]]; then
+        log_info "HTTPS repository detected; SSH setup skipped"
+        return 0
+    fi
+
     mkdir -p "$SSH_DIR"
     chmod 700 "$SSH_DIR"
 
