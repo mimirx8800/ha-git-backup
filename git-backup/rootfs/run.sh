@@ -297,7 +297,7 @@ generate_file_summary() {
     files=$(git diff --cached --name-only)
 
     local count
-    count=$(echo "$files" | grep -c . || echo 0)
+    count=$(printf '%s\n' "$files" | sed '/^$/d' | wc -l | tr -d ' ')
 
     if [ "$count" -eq 0 ]; then
         echo ""
@@ -337,7 +337,6 @@ do_backup() {
  RSYNC_ARGS=(
     -av
     --delete
-    --delete-excluded
     --exclude='.git/'
     --exclude='*.db'
     --exclude='*.db-shm'
