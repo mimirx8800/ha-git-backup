@@ -194,9 +194,28 @@ setup_repository() {
     git config --global --add safe.directory "$REPO_DIR"
 
     if [ -d "$REPO_DIR/.git" ]; then
-        log_info "Repository already exists, fetching updates..."
-        cd "$REPO_DIR"
-        git fetch origin "$BRANCH" 2>/dev/null || log_warn "Could not fetch from remote"
+        local current_origin
+        current_origin=$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)
+
+        if [ "$current_origin" != "$REPOSITORY_URL" ]; then
+            log_warn "Repository URL changed; recreating local checkout safely"
+            rm -rf "$REPO_DIR"
+            mkdir -p "$REPO_DIR"
+
+            if git clone --branch "$BRANCH" --single-branch "$REPOSITORY_URL" "$REPO_DIR" 2>/dev/null; then
+                log_info "Repository cloned successfully"
+            else
+                log_info "Could not clone (may be empty repo), initializing..."
+                cd "$REPO_DIR"
+                git init
+                git checkout -b "$BRANCH"
+                git remote add origin "$REPOSITORY_URL"
+            fi
+        else
+            log_info "Repository already exists, fetching updates..."
+            cd "$REPO_DIR"
+            git fetch origin "$BRANCH" 2>/dev/null || log_warn "Could not fetch from remote"
+        fi
     else
         log_info "Cloning repository..."
         mkdir -p "$REPO_DIR"
@@ -289,12 +308,45 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# Supervisor token recovery
+# ------------------------------------------------------------------------------
+load_supervisor_token() {
+    # Normal add-on environment
+    if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
+        export SUPERVISOR_TOKEN
+        return 0
+    fi
+
+    # Legacy variable, still supplied by Supervisor for compatibility
+    if [ -n "${HASSIO_TOKEN:-}" ]; then
+        export SUPERVISOR_TOKEN="$HASSIO_TOKEN"
+        return 0
+    fi
+
+    # s6-overlay keeps the original container environment here; legacy CMD
+    # services may not inherit every variable directly.
+    if [ -r /run/s6/container_environment/SUPERVISOR_TOKEN ]; then
+        SUPERVISOR_TOKEN=$(cat /run/s6/container_environment/SUPERVISOR_TOKEN)
+        export SUPERVISOR_TOKEN
+        [ -n "$SUPERVISOR_TOKEN" ] && return 0
+    fi
+
+    if [ -r /run/s6/container_environment/HASSIO_TOKEN ]; then
+        SUPERVISOR_TOKEN=$(cat /run/s6/container_environment/HASSIO_TOKEN)
+        export SUPERVISOR_TOKEN
+        [ -n "$SUPERVISOR_TOKEN" ] && return 0
+    fi
+
+    return 1
+}
+
+# ------------------------------------------------------------------------------
 # Privacy-filtered Home Assistant state snapshot
 # ------------------------------------------------------------------------------
 generate_state_snapshot() {
     local output="$REPO_DIR/debug/states.yaml"
 
-    if [ -z "${SUPERVISOR_TOKEN:-}" ]; then
+    if ! load_supervisor_token; then
         log_warn "SUPERVISOR_TOKEN is unavailable; skipping state snapshot"
         return 0
     fi
@@ -346,9 +398,6 @@ do_backup() {
 
     cd "$REPO_DIR"
 
-    # Generate/update .gitignore
-    generate_gitignore
-
     # Sync configuration files using rsync
     log_info "Syncing configuration from $HA_CONFIG..."
 
@@ -388,6 +437,9 @@ do_backup() {
         "$HA_CONFIG/" "$REPO_DIR/" 2>/dev/null || {
             log_warn "rsync had warnings, continuing..."
         }
+
+    # Generate/update .gitignore after rsync so --delete cannot remove it
+    generate_gitignore
 
     # Add a filtered snapshot of current Home Assistant entity states
     generate_state_snapshot
