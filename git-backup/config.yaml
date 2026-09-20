@@ -1,5 +1,5 @@
 name: Git Config Backup Fixed
-version: "1.0.21"
+version: "1.0.22"
 slug: git_config_backup_fixed
 description: Automatically backup Home Assistant configuration to a Git repository
 url: "https://github.com/mimirx8800/ha-git-backup"
@@ -59,18 +59,26 @@ options:
     - "esphome/.device-builder.json.lock"
     - "esphome/archive/*"
     - "www/tmp*.jpg"
+    - "custom_components/*"
+    - "www/*"
+    - "themes/*"
+    - "deps/*"
+    - ".ha_run.lock"
   include_patterns:
     - "*.yaml"
     - "*.yml"
-    - "*.json"
-    - "*.js"
     - "*.py"
+    - "*.jinja"
+    - "*.j2"
     - "*.sh"
-    - "scripts/*"
+    - "*.conf"
+    - "*.toml"
     - "blueprints/*"
-    - "custom_components/*"
-    - "themes/*"
-    - "www/*"
+    - "esphome/*"
+    - "lovelace/*"
+    - "packages/*"
+    - "python_scripts/*"
+    - "custom_templates/*"
 
 schema:
   repository_url: str?
