@@ -289,6 +289,25 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# Privacy-filtered Home Assistant state snapshot
+# ------------------------------------------------------------------------------
+generate_state_snapshot() {
+    local output="$REPO_DIR/debug/states.yaml"
+
+    if [ -z "${SUPERVISOR_TOKEN:-}" ]; then
+        log_warn "SUPERVISOR_TOKEN is unavailable; skipping state snapshot"
+        return 0
+    fi
+
+    log_info "Generating privacy-filtered Home Assistant state snapshot..."
+    if python3 /state_snapshot.py "$output"; then
+        log_info "State snapshot updated: debug/states.yaml"
+    else
+        log_warn "State snapshot generation failed; keeping previous snapshot if present"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # File summary for commit messages
 # ------------------------------------------------------------------------------
 generate_file_summary() {
@@ -369,6 +388,9 @@ do_backup() {
         "$HA_CONFIG/" "$REPO_DIR/" 2>/dev/null || {
             log_warn "rsync had warnings, continuing..."
         }
+
+    # Add a filtered snapshot of current Home Assistant entity states
+    generate_state_snapshot
 
     # Stage all changes
     git add -A
