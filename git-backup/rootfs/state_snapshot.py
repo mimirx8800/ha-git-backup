@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Generate a privacy-filtered Home Assistant state snapshot for diagnostics."""
+"""Generate a compact, privacy-filtered Home Assistant diagnostic snapshot."""
 
+import glob
 import json
 import os
 import sys
@@ -10,16 +11,22 @@ import urllib.request
 from datetime import datetime, timezone
 
 API_URL = "http://supervisor/core/api/states"
+HA_CONFIG = "/config"
 
 SAFE_DOMAINS = {
+    "automation",
     "climate",
-    "switch",
     "fan",
-    "number",
-    "input_number",
-    "select",
-    "input_select",
     "input_boolean",
+    "input_datetime",
+    "input_number",
+    "input_select",
+    "number",
+    "schedule",
+    "script",
+    "select",
+    "switch",
+    "timer",
     "water_heater",
 }
 
@@ -108,6 +115,12 @@ SAFE_ATTRIBUTES = {
     "max",
     "step",
     "mode",
+    "last_triggered",
+    "current",
+    "supported_features",
+    "remaining",
+    "duration",
+    "editable",
 }
 
 
@@ -162,6 +175,39 @@ def sanitize_entity(entity):
     return item
 
 
+def read_ha_version():
+    try:
+        with open(os.path.join(HA_CONFIG, ".HA_VERSION"), "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
+def custom_component_inventory():
+    """Return only public metadata useful for troubleshooting installed custom integrations."""
+    items = []
+
+    for manifest_path in sorted(
+        glob.glob(os.path.join(HA_CONFIG, "custom_components", "*", "manifest.json"))
+    ):
+        domain = os.path.basename(os.path.dirname(manifest_path))
+        item = {"domain": domain}
+
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            if manifest.get("name"):
+                item["name"] = manifest["name"]
+            if manifest.get("version"):
+                item["version"] = manifest["version"]
+        except (OSError, ValueError, TypeError):
+            item["metadata"] = "unavailable"
+
+        items.append(item)
+
+    return items
+
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: state_snapshot.py OUTPUT_PATH", file=sys.stderr)
@@ -199,7 +245,9 @@ def main():
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "source": "Home Assistant Core API via Supervisor",
             "privacy": "Filtered diagnostic snapshot; sensitive domains and attributes omitted",
+            "home_assistant_version": read_ha_version(),
             "entity_count": len(entities),
+            "custom_components": custom_component_inventory(),
         },
         "entities": entities,
     }
@@ -207,8 +255,8 @@ def main():
     output_path = sys.argv[1]
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    # JSON is valid YAML 1.2; using a .yaml extension keeps this file visible
-    # while the config backup intentionally excludes ordinary *.json files.
+    # JSON is valid YAML 1.2; the .yaml extension is intentional because ordinary
+    # JSON files from /config are never backed up.
     with open(output_path, "w", encoding="utf-8") as handle:
         json.dump(snapshot, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
