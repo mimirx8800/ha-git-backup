@@ -1,5 +1,5 @@
 name: Git Config Backup Fixed
-version: "1.0.19"
+version: "1.0.20"
 slug: git_config_backup_fixed
 description: Automatically backup Home Assistant configuration to a Git repository
 url: "https://github.com/mimirx8800/ha-git-backup"
@@ -29,12 +29,12 @@ options:
   username: ""
   password: ""
   ssh_key: ""
-  auto_generate_ssh_key: true
+  auto_generate_ssh_key: false
   commit_message: "Backup: {files}"
   commit_user_name: "Home Assistant"
   commit_user_email: "homeassistant@local"
   backup_interval_hours: 24
-  backup_on_start: true
+  backup_on_start: false
   watch_realtime: false
   watch_min_interval: 30
   watch_max_interval: 1800
@@ -51,6 +51,14 @@ options:
     - ".storage/*"
     - "backups/*"
     - ".cloud/*"
+    - "secrets.yaml"
+    - "zigbee2mqtt/*"
+    - "esphome/secrets.yaml"
+    - ".cache/*"
+    - "esphome/.device-builder-peer-link-key.bin"
+    - "esphome/.device-builder.json.lock"
+    - "esphome/archive/*"
+    - "www/tmp*.jpg"
   include_patterns:
     - "*.yaml"
     - "*.yml"
@@ -63,8 +71,6 @@ options:
     - "custom_components/*"
     - "themes/*"
     - "www/*"
-    - "!.storage/lovelace*"
-    - "!.storage/core.config"
 
 schema:
   repository_url: str?
@@ -97,6 +103,7 @@ panel_title: Git Backup
 # Access to Home Assistant API for triggering via services
 homeassistant_api: true
 hassio_api: true
+hassio_role: homeassistant
 
 # Labels
 
