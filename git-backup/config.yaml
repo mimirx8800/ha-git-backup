@@ -1,8 +1,8 @@
-name: Git Config Backup
+name: Git Config Backup Fixed
 version: "1.0.14"
-slug: git_config_backup
+slug: git_config_backup_fixed
 description: Automatically backup Home Assistant configuration to a Git repository
-url: "https://github.com/sttts/ha-git-backup"
+url: "https://github.com/mimirx8800/ha-git-backup"
 arch:
   - armhf
   - armv7
