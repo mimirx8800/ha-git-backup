@@ -333,21 +333,35 @@ do_backup() {
     # Sync configuration files using rsync
     log_info "Syncing configuration from $HA_CONFIG..."
 
-    rsync -av --delete \
-        --exclude='.git/' \
-        --exclude='*.db' \
-        --exclude='*.db-shm' \
-        --exclude='*.db-wal' \
-        --exclude='*.log' \
-        --exclude='home-assistant.log*' \
-        --exclude='tts/' \
-        --exclude='backups/' \
-        --exclude='.cloud/' \
-        --exclude='__pycache__/' \
-        --include='.storage/lovelace*' \
-        --include='.storage/core.config' \
-        --exclude='.storage/*' \
-        --exclude='OZW_Log.txt' \
+ # Build rsync arguments
+ RSYNC_ARGS=(
+    -av
+    --delete
+    --delete-excluded
+    --exclude='.git/'
+    --exclude='*.db'
+    --exclude='*.db-shm'
+    --exclude='*.db-wal'
+    --exclude='*.log'
+    --exclude='home-assistant.log*'
+    --exclude='tts/'
+    --exclude='backups/'
+    --exclude='.cloud/'
+    --exclude='__pycache__/'
+    --exclude='OZW_Log.txt'
+    --exclude='secrets.yaml'
+    --exclude='.storage/'
+    --exclude='zigbee2mqtt/'
+    --exclude='esphome/secrets.yaml'
+    --exclude='*.json'
+)
+
+    # Apply user-defined exclusions from add-on configuration
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] && RSYNC_ARGS+=(--exclude="$pattern")
+    done < <(get_config_array "exclude_patterns")
+
+    rsync "${RSYNC_ARGS[@]}" \
         "$HA_CONFIG/" "$REPO_DIR/" 2>/dev/null || {
             log_warn "rsync had warnings, continuing..."
         }
