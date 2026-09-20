@@ -357,6 +357,7 @@ do_backup() {
     --exclude='esphome/.device-builder-peer-link-key.bin'
     --exclude='esphome/.device-builder.json.lock'
     --exclude='esphome/archive/'
+    --exclude='www/tmp*.jpg'
 )
 
     # Apply user-defined exclusions from add-on configuration
