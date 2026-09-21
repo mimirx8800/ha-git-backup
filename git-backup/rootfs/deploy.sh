@@ -226,11 +226,11 @@ do_deploy_preview() {
     if build_deploy_plan; then
         log_info "ChatGPT deploy preview is ready"
         return 0
+    else
+        local rc=$?
+        [ "$rc" -eq 2 ] && return 0
+        return "$rc"
     fi
-
-    local rc=$?
-    [ "$rc" -eq 2 ] && return 0
-    return "$rc"
 }
 
 do_deploy_apply() {
