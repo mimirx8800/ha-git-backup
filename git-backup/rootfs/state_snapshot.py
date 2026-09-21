@@ -8,11 +8,13 @@ import re
 import sys
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-API_URL = "http://supervisor/core/api/states"
+API_BASE = "http://supervisor/core/api"
+STATES_URL = f"{API_BASE}/states"
 HA_CONFIG = "/config"
 
 SAFE_DOMAINS = {
@@ -53,6 +55,8 @@ SAFE_SENSOR_CLASSES = {
     "pm25",
     "signal_strength",
 }
+
+HISTORY_NUMERIC_CLASSES = SAFE_SENSOR_CLASSES - {"battery", "signal_strength"}
 
 SAFE_BINARY_CLASSES = {
     "cold",
@@ -160,11 +164,49 @@ NUMERIC_CHANGE_THRESHOLDS = {
 
 PROBLEM_STATES = {"unavailable", "unknown"}
 
+REFERENCE_DOMAINS = SAFE_DOMAINS | {"sensor", "binary_sensor"}
+SERVICE_OBJECT_IDS = {
+    "turn_on",
+    "turn_off",
+    "toggle",
+    "reload",
+    "update_entity",
+    "set_value",
+    "set_temperature",
+    "set_hvac_mode",
+    "set_preset_mode",
+    "select_option",
+    "increment",
+    "decrement",
+    "open_cover",
+    "close_cover",
+    "stop_cover",
+    "press",
+    "start",
+    "cancel",
+    "pause",
+    "finish",
+    "run",
+}
+ENTITY_REF_RE = re.compile(r"\b([a-z_][a-z0-9_]*\.[a-z0-9_]+)\b")
+
 
 def normalize(value):
     value = str(value or "").lower()
     value = unicodedata.normalize("NFKD", value)
     return "".join(ch for ch in value if not unicodedata.combining(ch))
+
+
+def api_get(url, token, timeout=20):
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
 
 
 def is_safe_entity(entity):
@@ -221,7 +263,6 @@ def read_ha_version():
 
 
 def custom_component_inventory():
-    """Return only public metadata useful for troubleshooting custom integrations."""
     items = []
 
     for manifest_path in sorted(
@@ -273,15 +314,14 @@ def friendly_item(entity):
 
 
 def problem_group_label(entity):
-    """Best-effort grouping label for multiple broken entities from one device."""
     attrs = entity.get("attributes") or {}
     friendly = str(attrs.get("friendly_name") or "").strip()
 
     if friendly:
         cleaned = re.sub(
             r"\s+(temperature|humidity|battery|batterie|power|puissance|voltage|"
-            r"tension|current|courant|pressure|pression|energy|energie|signal"
-            r"|linkquality|lqi|rssi)$",
+            r"tension|current|courant|pressure|pression|energy|energie|signal|"
+            r"linkquality|lqi|rssi)$",
             "",
             friendly,
             flags=re.IGNORECASE,
@@ -365,10 +405,7 @@ def build_health(raw_entities, generated_at):
                 battery_item["unit"] = attrs.get("unit_of_measurement")
                 low_batteries.append(battery_item)
 
-        if (
-            domain in {"sensor", "binary_sensor"}
-            and state not in PROBLEM_STATES
-        ):
+        if domain in {"sensor", "binary_sensor"} and state not in PROBLEM_STATES:
             age_hours = hours_since(entity.get("last_updated"), now)
             if age_hours is not None and age_hours >= 24:
                 old_item = dict(item)
@@ -400,6 +437,7 @@ def build_health(raw_entities, generated_at):
         for entity in raw_entities
         if str(entity.get("state") or "") in PROBLEM_STATES
     ]
+    problem_groups = build_problem_groups(problem_entities)
 
     return {
         "_meta": {
@@ -415,12 +453,12 @@ def build_health(raw_entities, generated_at):
             "filtered_entity_count": len(raw_entities),
             "unavailable_count": len(unavailable),
             "unknown_count": len(unknown),
-            "problem_device_group_count": len(build_problem_groups(problem_entities)),
+            "problem_device_group_count": len(problem_groups),
             "low_battery_count": len(low_batteries),
             "not_updated_24h_count": len(not_updated_24h),
             "automations_triggered_24h_count": len(automations_24h),
         },
-        "problem_device_groups": build_problem_groups(problem_entities),
+        "problem_device_groups": problem_groups,
         "unavailable": unavailable[:60],
         "unknown": unknown[:60],
         "low_batteries": low_batteries[:50],
@@ -516,22 +554,14 @@ def build_changes(previous_snapshot, current_entities, generated_at):
         friendly_name = attrs.get("friendly_name") or old_attrs.get("friendly_name")
 
         if old_state not in PROBLEM_STATES and new_state in PROBLEM_STATES:
-            item = {
-                "entity_id": entity_id,
-                "from": old_state,
-                "to": new_state,
-            }
+            item = {"entity_id": entity_id, "from": old_state, "to": new_state}
             if friendly_name:
                 item["friendly_name"] = friendly_name
             became_unavailable.append(item)
             continue
 
         if old_state in PROBLEM_STATES and new_state not in PROBLEM_STATES:
-            item = {
-                "entity_id": entity_id,
-                "from": old_state,
-                "to": new_state,
-            }
+            item = {"entity_id": entity_id, "from": old_state, "to": new_state}
             if friendly_name:
                 item["friendly_name"] = friendly_name
             recovered.append(item)
@@ -540,10 +570,7 @@ def build_changes(previous_snapshot, current_entities, generated_at):
             previous_trigger = old_attrs.get("last_triggered")
             current_trigger = attrs.get("last_triggered")
             if current_trigger and current_trigger != previous_trigger:
-                item = {
-                    "entity_id": entity_id,
-                    "last_triggered": current_trigger,
-                }
+                item = {"entity_id": entity_id, "last_triggered": current_trigger}
                 if friendly_name:
                     item["friendly_name"] = friendly_name
                 automation_triggers.append(item)
@@ -580,11 +607,7 @@ def build_changes(previous_snapshot, current_entities, generated_at):
             )
 
         if meaningful:
-            item = {
-                "entity_id": entity_id,
-                "from": old_state,
-                "to": new_state,
-            }
+            item = {"entity_id": entity_id, "from": old_state, "to": new_state}
             if delta is not None:
                 item["delta"] = delta
             if attrs.get("unit_of_measurement"):
@@ -623,6 +646,314 @@ def build_changes(previous_snapshot, current_entities, generated_at):
     }
 
 
+def is_history_candidate(entity):
+    entity_id = str(entity.get("entity_id") or "")
+    domain = entity_id.split(".", 1)[0]
+    attrs = entity.get("attributes") or {}
+    state = str(entity.get("state") or "")
+
+    if domain == "sensor":
+        device_class = str(attrs.get("device_class") or "")
+        if device_class in HISTORY_NUMERIC_CLASSES and to_number(state) is not None:
+            return True
+        searchable = normalize(entity_id + " " + str(attrs.get("friendly_name") or ""))
+        return (
+            any(keyword in searchable for keyword in DIAGNOSTIC_KEYWORDS)
+            and to_number(state) is not None
+        )
+
+    if domain in {"switch", "fan", "climate", "water_heater"}:
+        searchable = normalize(entity_id + " " + str(attrs.get("friendly_name") or ""))
+        return any(keyword in searchable for keyword in DIAGNOSTIC_KEYWORDS)
+
+    return False
+
+
+def history_priority(entity):
+    entity_id = str(entity.get("entity_id") or "")
+    attrs = entity.get("attributes") or {}
+    searchable = normalize(entity_id + " " + str(attrs.get("friendly_name") or ""))
+    score = 0
+    if any(keyword in searchable for keyword in DIAGNOSTIC_KEYWORDS):
+        score += 10
+    device_class = str(attrs.get("device_class") or "")
+    if device_class in {"temperature", "power", "energy", "current", "pressure"}:
+        score += 5
+    if entity_id.startswith(("climate.", "switch.", "fan.", "water_heater.")):
+        score += 3
+    return (-score, entity_id)
+
+
+def fetch_history_24h(token, raw_entities, now):
+    candidates = [entity for entity in raw_entities if is_history_candidate(entity)]
+    candidates.sort(key=history_priority)
+    candidates = candidates[:160]
+
+    ids = [str(entity.get("entity_id")) for entity in candidates]
+    current_by_id = {str(entity.get("entity_id")): entity for entity in candidates}
+    start = now - timedelta(hours=24)
+    history_by_id = {}
+    errors = []
+
+    for offset in range(0, len(ids), 20):
+        batch = ids[offset:offset + 20]
+        start_part = urllib.parse.quote(start.isoformat(), safe="")
+        query = urllib.parse.urlencode(
+            {
+                "filter_entity_id": ",".join(batch),
+                "end_time": now.isoformat(),
+            }
+        )
+        url = (
+            f"{API_BASE}/history/period/{start_part}?{query}"
+            "&minimal_response&no_attributes"
+        )
+        try:
+            payload = api_get(url, token, timeout=30)
+            if not isinstance(payload, list):
+                raise ValueError("unexpected history response")
+            for group in payload:
+                if not isinstance(group, list) or not group:
+                    continue
+                entity_id = next(
+                    (
+                        str(row.get("entity_id"))
+                        for row in group
+                        if isinstance(row, dict) and row.get("entity_id")
+                    ),
+                    None,
+                )
+                if entity_id:
+                    history_by_id[entity_id] = group
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+            errors.append(f"batch {offset // 20 + 1}: {type(exc).__name__}")
+
+    numeric = []
+    state_durations = []
+
+    for entity_id in ids:
+        group = history_by_id.get(entity_id) or []
+        current = current_by_id.get(entity_id) or {}
+        attrs = current.get("attributes") or {}
+        domain = entity_id.split(".", 1)[0]
+        friendly_name = attrs.get("friendly_name")
+
+        if domain == "sensor":
+            values = []
+            for row in group:
+                if not isinstance(row, dict):
+                    continue
+                value = to_number(row.get("state"))
+                if value is not None:
+                    values.append(value)
+            if values:
+                item = {
+                    "entity_id": entity_id,
+                    "samples": len(values),
+                    "min": round(min(values), 3),
+                    "max": round(max(values), 3),
+                    "average_recorded": round(sum(values) / len(values), 3),
+                    "first": round(values[0], 3),
+                    "last": round(values[-1], 3),
+                    "change": round(values[-1] - values[0], 3),
+                }
+                if friendly_name:
+                    item["friendly_name"] = friendly_name
+                if attrs.get("unit_of_measurement"):
+                    item["unit"] = attrs.get("unit_of_measurement")
+                if attrs.get("device_class"):
+                    item["device_class"] = attrs.get("device_class")
+                numeric.append(item)
+            continue
+
+        if domain not in {"switch", "fan", "climate", "water_heater"} or not group:
+            continue
+
+        rows = [row for row in group if isinstance(row, dict) and row.get("state") is not None]
+        if not rows:
+            continue
+
+        durations = defaultdict(float)
+        transitions = 0
+        for index, row in enumerate(rows):
+            row_time = parse_timestamp(row.get("last_changed") or row.get("last_updated"))
+            if row_time is None:
+                continue
+            segment_start = max(row_time, start)
+            if index + 1 < len(rows):
+                next_time = parse_timestamp(
+                    rows[index + 1].get("last_changed")
+                    or rows[index + 1].get("last_updated")
+                )
+                segment_end = min(next_time, now) if next_time else now
+            else:
+                segment_end = now
+            if segment_end > segment_start:
+                durations[str(row.get("state"))] += (
+                    segment_end - segment_start
+                ).total_seconds() / 3600.0
+            if index > 0 and str(rows[index - 1].get("state")) != str(row.get("state")):
+                transitions += 1
+
+        if durations:
+            item = {
+                "entity_id": entity_id,
+                "state_hours": {
+                    key: round(value, 2)
+                    for key, value in sorted(durations.items())
+                },
+                "transitions": transitions,
+                "current_state": str(current.get("state") or ""),
+            }
+            if friendly_name:
+                item["friendly_name"] = friendly_name
+            state_durations.append(item)
+
+    return {
+        "_meta": {
+            "generated_at": now.isoformat(),
+            "period_hours": 24,
+            "candidate_entity_count": len(ids),
+            "history_entity_count": len(history_by_id),
+            "history_batch_errors": errors,
+            "note": (
+                "Numeric averages are averages of recorded state changes, not time-weighted. "
+                "Operational state_hours are best-effort summaries from Home Assistant history."
+            ),
+        },
+        "summary": {
+            "numeric_entity_count": len(numeric),
+            "operational_entity_count": len(state_durations),
+            "batch_error_count": len(errors),
+        },
+        "numeric": numeric,
+        "operational_state_durations": state_durations,
+    }
+
+
+def build_inventory(all_states, raw_entities, generated_at):
+    all_counts = Counter(
+        str(entity.get("entity_id") or "").split(".", 1)[0]
+        for entity in all_states
+        if entity.get("entity_id")
+    )
+    mirrored_counts = Counter(
+        str(entity.get("entity_id") or "").split(".", 1)[0]
+        for entity in raw_entities
+        if entity.get("entity_id")
+    )
+    custom_components = custom_component_inventory()
+
+    return {
+        "_meta": {
+            "generated_at": generated_at,
+            "home_assistant_version": read_ha_version(),
+            "privacy": (
+                "Inventory contains counts and custom integration metadata only; "
+                "no device registry, areas, locations or secrets are exported."
+            ),
+        },
+        "summary": {
+            "total_entity_count": sum(all_counts.values()),
+            "total_domain_count": len(all_counts),
+            "mirrored_entity_count": sum(mirrored_counts.values()),
+            "custom_component_count": len(custom_components),
+        },
+        "entity_domain_counts": dict(sorted(all_counts.items())),
+        "mirrored_domain_counts": dict(sorted(mirrored_counts.items())),
+        "custom_components": custom_components,
+    }
+
+
+def iter_config_files():
+    top_files = [
+        "configuration.yaml",
+        "automations.yaml",
+        "scripts.yaml",
+        "scenes.yaml",
+    ]
+    for name in top_files:
+        path = os.path.join(HA_CONFIG, name)
+        if os.path.isfile(path):
+            yield path
+
+    for folder in ("packages", "lovelace", "python_scripts", "custom_templates"):
+        base = os.path.join(HA_CONFIG, folder)
+        if not os.path.isdir(base):
+            continue
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [
+                item
+                for item in dirs
+                if item not in {".git", ".storage", ".cache", "__pycache__"}
+            ]
+            for name in sorted(files):
+                if name.endswith((".yaml", ".yml", ".jinja", ".j2", ".py")):
+                    yield os.path.join(root, name)
+
+
+def build_config_check(all_states, generated_at):
+    existing_ids = {
+        str(entity.get("entity_id"))
+        for entity in all_states
+        if entity.get("entity_id")
+    }
+    references = defaultdict(list)
+    scanned_files = 0
+
+    for path in iter_config_files():
+        scanned_files += 1
+        rel = os.path.relpath(path, HA_CONFIG)
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                for line_number, line in enumerate(handle, 1):
+                    stripped = line.strip()
+                    service_context = bool(
+                        re.search(r"\b(service|action)\s*:", stripped)
+                    )
+                    for match in ENTITY_REF_RE.finditer(line):
+                        entity_id = match.group(1)
+                        domain, object_id = entity_id.split(".", 1)
+                        if domain not in REFERENCE_DOMAINS:
+                            continue
+                        if service_context and object_id in SERVICE_OBJECT_IDS:
+                            continue
+                        if object_id in SERVICE_OBJECT_IDS:
+                            continue
+                        references[entity_id].append(
+                            {"file": rel, "line": line_number}
+                        )
+        except OSError:
+            continue
+
+    unresolved = []
+    for entity_id, locations in sorted(references.items()):
+        if entity_id in existing_ids:
+            continue
+        unresolved.append(
+            {
+                "entity_id": entity_id,
+                "locations": locations[:5],
+            }
+        )
+
+    return {
+        "_meta": {
+            "generated_at": generated_at,
+            "note": (
+                "This is a conservative text-based check of diagnostic entity references. "
+                "Items are possible stale references, not guaranteed configuration errors."
+            ),
+        },
+        "summary": {
+            "files_scanned": scanned_files,
+            "unique_entity_reference_count": len(references),
+            "possible_missing_reference_count": len(unresolved),
+        },
+        "possible_missing_entity_references": unresolved[:100],
+    }
+
+
 def write_json_yaml(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
@@ -631,9 +962,9 @@ def write_json_yaml(path, data):
 
 
 def main():
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 8:
         print(
-            "Usage: state_snapshot.py PREVIOUS_STATES STATES_OUTPUT HEALTH_OUTPUT CHANGES_OUTPUT",
+            "Usage: state_snapshot.py PREVIOUS_STATES STATES HEALTH CHANGES HISTORY INVENTORY CONFIG_CHECK",
             file=sys.stderr,
         )
         return 2
@@ -642,6 +973,9 @@ def main():
     states_output = sys.argv[2]
     health_output = sys.argv[3]
     changes_output = sys.argv[4]
+    history_output = sys.argv[5]
+    inventory_output = sys.argv[6]
+    config_check_output = sys.argv[7]
 
     previous_snapshot = load_previous_snapshot(previous_path)
 
@@ -650,19 +984,14 @@ def main():
         print("SUPERVISOR_TOKEN is not available", file=sys.stderr)
         return 1
 
-    request = urllib.request.Request(
-        API_URL,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            states = json.load(response)
+        states = api_get(STATES_URL, token, timeout=15)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
         print(f"Unable to read Home Assistant states: {exc}", file=sys.stderr)
+        return 1
+
+    if not isinstance(states, list):
+        print("Unexpected Home Assistant states response", file=sys.stderr)
         return 1
 
     raw_entities = [entity for entity in states if is_safe_entity(entity)]
@@ -670,6 +999,8 @@ def main():
     entities.sort(key=lambda item: item.get("entity_id") or "")
 
     generated_at = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+
     snapshot = {
         "_meta": {
             "generated_at": generated_at,
@@ -684,13 +1015,20 @@ def main():
 
     health = build_health(raw_entities, generated_at)
     changes = build_changes(previous_snapshot, entities, generated_at)
+    history = fetch_history_24h(token, raw_entities, now)
+    inventory = build_inventory(states, raw_entities, generated_at)
+    config_check = build_config_check(states, generated_at)
 
     write_json_yaml(states_output, snapshot)
     write_json_yaml(health_output, health)
     write_json_yaml(changes_output, changes)
+    write_json_yaml(history_output, history)
+    write_json_yaml(inventory_output, inventory)
+    write_json_yaml(config_check_output, config_check)
 
     print(
-        f"Wrote {len(entities)} filtered entities, health summary and change summary"
+        f"Wrote {len(entities)} filtered entities plus health, changes, "
+        "24h history, inventory and config checks"
     )
     return 0
 
