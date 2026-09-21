@@ -357,31 +357,53 @@ generate_state_snapshot() {
     local output="$REPO_DIR/debug/states.yaml"
     local health="$REPO_DIR/debug/health.yaml"
     local changes="$REPO_DIR/debug/changes.yaml"
+    local history="$REPO_DIR/debug/history_24h.yaml"
+    local inventory="$REPO_DIR/debug/inventory.yaml"
+    local config_check="$REPO_DIR/debug/config_check.yaml"
+
     local tmp_output="$REPO_DIR/debug/.states.yaml.tmp"
     local tmp_health="$REPO_DIR/debug/.health.yaml.tmp"
     local tmp_changes="$REPO_DIR/debug/.changes.yaml.tmp"
+    local tmp_history="$REPO_DIR/debug/.history_24h.yaml.tmp"
+    local tmp_inventory="$REPO_DIR/debug/.inventory.yaml.tmp"
+    local tmp_config_check="$REPO_DIR/debug/.config_check.yaml.tmp"
 
     mkdir -p "$REPO_DIR/debug"
-    rm -f "$tmp_output" "$tmp_health" "$tmp_changes"
+    rm -f "$tmp_output" "$tmp_health" "$tmp_changes" \
+          "$tmp_history" "$tmp_inventory" "$tmp_config_check"
 
     if ! load_supervisor_token; then
         log_warn "SUPERVISOR_TOKEN is unavailable; keeping previous diagnostic files"
         return 0
     fi
 
-    log_info "Generating privacy-filtered Home Assistant diagnostic snapshot..."
-    if python3 /state_snapshot.py "$output" "$tmp_output" "$tmp_health" "$tmp_changes"; then
-        if [ -s "$tmp_output" ] && [ -s "$tmp_health" ] && [ -s "$tmp_changes" ]; then
+    log_info "Generating complete privacy-filtered Home Assistant diagnostics..."
+    if python3 /state_snapshot.py \
+        "$output" \
+        "$tmp_output" \
+        "$tmp_health" \
+        "$tmp_changes" \
+        "$tmp_history" \
+        "$tmp_inventory" \
+        "$tmp_config_check"; then
+
+        if [ -s "$tmp_output" ] && [ -s "$tmp_health" ] && [ -s "$tmp_changes" ] && \
+           [ -s "$tmp_history" ] && [ -s "$tmp_inventory" ] && [ -s "$tmp_config_check" ]; then
             mv -f "$tmp_output" "$output"
             mv -f "$tmp_health" "$health"
             mv -f "$tmp_changes" "$changes"
-            log_info "Diagnostics updated: states.yaml + health.yaml + changes.yaml"
+            mv -f "$tmp_history" "$history"
+            mv -f "$tmp_inventory" "$inventory"
+            mv -f "$tmp_config_check" "$config_check"
+            log_info "Diagnostics updated: states + health + changes + history_24h + inventory + config_check"
         else
-            rm -f "$tmp_output" "$tmp_health" "$tmp_changes"
+            rm -f "$tmp_output" "$tmp_health" "$tmp_changes" \
+                  "$tmp_history" "$tmp_inventory" "$tmp_config_check"
             log_warn "Diagnostic output was incomplete; keeping previous files"
         fi
     else
-        rm -f "$tmp_output" "$tmp_health" "$tmp_changes"
+        rm -f "$tmp_output" "$tmp_health" "$tmp_changes" \
+              "$tmp_history" "$tmp_inventory" "$tmp_config_check"
         log_warn "Diagnostic generation failed; keeping previous files"
     fi
 }
