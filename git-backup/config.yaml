@@ -1,5 +1,5 @@
 name: Git Config Backup Fixed
-version: "1.0.25"
+version: "1.0.26"
 slug: git_config_backup_fixed
 description: Automatically backup Home Assistant configuration to a Git repository
 url: "https://github.com/mimirx8800/ha-git-backup"
