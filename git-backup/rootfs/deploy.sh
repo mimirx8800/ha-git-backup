@@ -71,7 +71,10 @@ build_deploy_plan() {
 
     cd "$REPO_DIR"
 
-    if ! git fetch --prune origin "$BRANCH" "$DEPLOY_BRANCH" >/dev/null 2>&1; then
+    # The repository checkout is cloned with --single-branch, so explicitly
+    # create/update both remote-tracking refs. A plain "git fetch origin branch"
+    # only guarantees FETCH_HEAD and can leave origin/<branch> missing.
+    if ! git fetch --prune origin         "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"         "+refs/heads/$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH" >/dev/null 2>&1; then
         update_deploy_status "error" "Could not fetch main/deploy branches from Git"
         return 1
     fi
