@@ -79,6 +79,13 @@ WATCH_MIN_INTERVAL=$(get_config "watch_min_interval" "30")
 WATCH_MAX_INTERVAL=$(get_config "watch_max_interval" "1800")
 WATCH_BURST_LIMIT=$(get_config "watch_burst_limit" "5")
 CRON_SCHEDULE=$(get_config "cron_schedule" "")
+DEPLOY_ENABLED=$(get_config "deploy_enabled" "false")
+DEPLOY_BRANCH=$(get_config "deploy_branch" "chatgpt-changes")
+DEPLOY_REQUIRE_CONFIG_CHECK=$(get_config "deploy_require_config_check" "true")
+DEPLOY_AUTO_RELOAD=$(get_config "deploy_auto_reload" "true")
+
+# Deploy helper is intentionally separate from the backup implementation.
+source /deploy.sh
 
 # ------------------------------------------------------------------------------
 # SSH Key Management
@@ -713,286 +720,7 @@ start_file_watcher() {
 # ------------------------------------------------------------------------------
 start_webui() {
     log_info "Starting Web UI on port 8099..."
-
-    mkdir -p "$WEBUI_DIR"
-
-    # Create the web UI Python script
-    cat > "$WEBUI_DIR/server.py" << 'PYEOF'
-#!/usr/bin/env python3
-import http.server
-import json
-import os
-import subprocess
-import urllib.parse
-
-STATUS_FILE = "/data/status.json"
-SSH_PUB_FILE = "/data/ssh/id_ed25519.pub"
-
-class BackupHandler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        pass  # Suppress logging
-
-    def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
-
-        if path == "/" or path == "/index.html":
-            self.serve_html()
-        elif path == "/api/status":
-            self.serve_status()
-        elif path == "/api/ssh-key":
-            self.serve_ssh_key()
-        else:
-            self.send_error(404)
-
-    def do_POST(self):
-        path = urllib.parse.urlparse(self.path).path
-
-        if path == "/api/backup":
-            self.trigger_backup()
-        else:
-            self.send_error(404)
-
-    def serve_html(self):
-        html = """<!DOCTYPE html>
-<html>
-<head>
-    <title>Git Config Backup</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0; padding: 20px;
-            background: #f5f5f5;
-            color: #333;
-        }
-        .container { max-width: 800px; margin: 0 auto; }
-        h1 { color: #1976d2; margin-bottom: 20px; }
-        .card {
-            background: white;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .card h2 { margin-top: 0; color: #333; font-size: 1.2em; }
-        .status { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-        .status-dot {
-            width: 12px; height: 12px;
-            border-radius: 50%;
-            background: #ccc;
-        }
-        .status-dot.success { background: #4caf50; }
-        .status-dot.error { background: #f44336; }
-        .status-dot.running { background: #ff9800; animation: pulse 1s infinite; }
-        .status-dot.idle { background: #2196f3; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .ssh-key {
-            background: #263238;
-            color: #aed581;
-            padding: 15px;
-            border-radius: 4px;
-            font-family: 'Monaco', 'Menlo', monospace;
-            font-size: 12px;
-            word-break: break-all;
-            white-space: pre-wrap;
-            position: relative;
-        }
-        .copy-btn {
-            position: absolute;
-            top: 10px; right: 10px;
-            background: #455a64;
-            color: white;
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .copy-btn:hover { background: #546e7a; }
-        button.primary {
-            background: #1976d2;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        button.primary:hover { background: #1565c0; }
-        button.primary:disabled { background: #ccc; cursor: not-allowed; }
-        .info { color: #666; font-size: 0.9em; }
-        .info code { background: #eee; padding: 2px 6px; border-radius: 3px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Git Config Backup</h1>
-
-        <div class="card">
-            <h2>Status</h2>
-            <div class="status">
-                <div class="status-dot" id="statusDot"></div>
-                <span id="statusText">Loading...</span>
-            </div>
-            <div id="statusDetails" class="info"></div>
-            <br>
-            <button class="primary" id="backupBtn" onclick="triggerBackup()">
-                Run Backup Now
-            </button>
-        </div>
-
-        <div class="card">
-            <h2>SSH Public Key</h2>
-            <p class="info">Add this key to your Git provider (GitHub, GitLab, etc.) to enable SSH authentication:</p>
-            <div class="ssh-key" id="sshKey">
-                Loading...
-                <button class="copy-btn" onclick="copyKey()">Copy</button>
-            </div>
-            <br>
-            <p class="info">
-                <strong>GitHub:</strong> Settings → SSH and GPG keys → New SSH key<br>
-                <strong>GitLab:</strong> Preferences → SSH Keys → Add new key
-            </p>
-        </div>
-    </div>
-
-    <script>
-        function updateStatus() {
-            fetch('api/status')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('statusDot').className = 'status-dot ' + data.status;
-                    document.getElementById('statusText').textContent = data.message;
-                    let details = '';
-                    if (data.repository) details += 'Repository: ' + data.repository + '<br>';
-                    if (data.branch) details += 'Branch: ' + data.branch + '<br>';
-                    if (data.last_commit) details += 'Last commit: ' + data.last_commit + '<br>';
-                    if (data.last_update) details += 'Updated: ' + new Date(data.last_update).toLocaleString();
-                    document.getElementById('statusDetails').innerHTML = details;
-                })
-                .catch(() => {
-                    document.getElementById('statusText').textContent = 'Unable to fetch status';
-                });
-        }
-
-        function loadSSHKey() {
-            fetch('api/ssh-key')
-                .then(r => r.text())
-                .then(key => {
-                    document.getElementById('sshKey').innerHTML = key +
-                        '<button class="copy-btn" onclick="copyKey()">Copy</button>';
-                });
-        }
-
-        function copyKey() {
-            const keyEl = document.getElementById('sshKey');
-            const keyText = keyEl.textContent.replace('Copy', '').trim();
-
-            // Try modern clipboard API first
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(keyText).then(() => {
-                    showCopied();
-                }).catch(() => {
-                    fallbackCopy(keyText);
-                });
-            } else {
-                fallbackCopy(keyText);
-            }
-        }
-
-        function fallbackCopy(text) {
-            // Fallback: create temporary textarea
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.left = '-9999px';
-            document.body.appendChild(ta);
-            ta.select();
-            try {
-                document.execCommand('copy');
-                showCopied();
-            } catch (e) {
-                // Last resort: select the text for manual copy
-                alert('Press Ctrl+C / Cmd+C to copy:\\n\\n' + text);
-            }
-            document.body.removeChild(ta);
-        }
-
-        function showCopied() {
-            const btn = document.querySelector('.copy-btn');
-            btn.textContent = 'Copied!';
-            setTimeout(() => btn.textContent = 'Copy', 2000);
-        }
-
-        function triggerBackup() {
-            const btn = document.getElementById('backupBtn');
-            btn.disabled = true;
-            btn.textContent = 'Running...';
-
-            fetch('api/backup', { method: 'POST' })
-                .then(r => r.json())
-                .then(() => {
-                    setTimeout(updateStatus, 2000);
-                })
-                .finally(() => {
-                    btn.disabled = false;
-                    btn.textContent = 'Run Backup Now';
-                });
-        }
-
-        updateStatus();
-        loadSSHKey();
-        setInterval(updateStatus, 10000);
-    </script>
-</body>
-</html>"""
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(html.encode())
-
-    def serve_status(self):
-        try:
-            with open(STATUS_FILE, 'r') as f:
-                status = f.read()
-        except:
-            status = '{"status": "unknown", "message": "Status not available"}'
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(status.encode())
-
-    def serve_ssh_key(self):
-        try:
-            with open(SSH_PUB_FILE, 'r') as f:
-                key = f.read().strip()
-        except:
-            key = "No SSH key generated. Enable 'auto_generate_ssh_key' in configuration."
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(key.encode())
-
-    def trigger_backup(self):
-        # Signal the main process to run backup
-        with open("/tmp/trigger_backup", "w") as f:
-            f.write("1")
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"status": "triggered"}')
-
-if __name__ == "__main__":
-    server = http.server.HTTPServer(("0.0.0.0", 8099), BackupHandler)
-    print("Web UI running on port 8099")
-    server.serve_forever()
-PYEOF
-
-    chmod +x "$WEBUI_DIR/server.py"
-    python3 "$WEBUI_DIR/server.py" &
+    python3 /webui_server.py &
 }
 
 # ------------------------------------------------------------------------------
@@ -1002,6 +730,16 @@ check_manual_trigger() {
     if [ -f "/tmp/trigger_backup" ]; then
         rm -f "/tmp/trigger_backup"
         do_backup "manual_webui" || true
+    fi
+
+    if [ -f "/tmp/trigger_deploy_preview" ]; then
+        rm -f "/tmp/trigger_deploy_preview"
+        do_deploy_preview || true
+    fi
+
+    if [ -f "/tmp/trigger_deploy_apply" ]; then
+        rm -f "/tmp/trigger_deploy_apply"
+        do_deploy_apply || true
     fi
 }
 
@@ -1015,6 +753,7 @@ main() {
 
     # Initialize status
     update_status "starting" "Initializing..."
+    init_deploy_status
 
     # Setup SSH key
     setup_ssh_key
