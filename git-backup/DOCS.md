@@ -344,3 +344,38 @@ The add-on provides a simple HTTP API on port 8099 (accessible via Ingress):
 
 - [Issue Tracker](https://github.com/sttts/ha-git-backup/issues)
 - [Changelog](CHANGELOG.md)
+
+
+## ChatGPT Config Deploy (v1.1.0)
+
+The add-on can optionally apply configuration proposals from a dedicated Git branch.
+This supports a workflow where ChatGPT prepares changes in the private diagnostic
+repository while Home Assistant remains the final safety gate.
+
+Enable it with:
+
+```yaml
+deploy_enabled: true
+deploy_branch: "chatgpt-changes"
+deploy_require_config_check: true
+deploy_auto_reload: true
+```
+
+Deployment is **manual only**. Open the add-on Web UI, use **Preview changes**, then
+explicitly confirm **Apply ChatGPT changes**.
+
+The first version is intentionally limited to:
+
+- `automations.yaml`
+- `scripts.yaml`
+- `scenes.yaml`
+
+Before applying anything, the add-on creates a fresh backup of the current Home
+Assistant configuration and checks that none of the proposed files has changed since
+the proposal branch was created. A conflict is blocked rather than overwritten.
+
+Candidate files are written atomically and Home Assistant's
+`/api/config/core/check_config` validation is then executed. If validation fails,
+the original files are restored immediately. If validation succeeds, the affected
+domains can be reloaded automatically and the accepted files are backed up to the
+normal main branch.
