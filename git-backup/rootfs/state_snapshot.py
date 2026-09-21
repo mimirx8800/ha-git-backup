@@ -208,9 +208,101 @@ def custom_component_inventory():
     return items
 
 
+def parse_timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def build_health(raw_entities, generated_at):
+    now = datetime.now(timezone.utc)
+    unavailable = []
+    low_batteries = []
+    stale_sensors = []
+    recent_automations = []
+
+    for entity in raw_entities:
+        entity_id = entity.get("entity_id", "")
+        domain = entity_id.split(".", 1)[0]
+        state = str(entity.get("state") or "")
+        attrs = entity.get("attributes") or {}
+        friendly_name = attrs.get("friendly_name")
+        item = {"entity_id": entity_id, "state": state}
+        if friendly_name:
+            item["friendly_name"] = friendly_name
+
+        if state in {"unavailable", "unknown"}:
+            unavailable.append(item)
+
+        device_class = str(attrs.get("device_class") or "")
+        if device_class == "battery":
+            is_low = False
+            if domain == "binary_sensor":
+                is_low = state == "on"
+            elif domain == "sensor":
+                try:
+                    is_low = float(state) <= 20
+                except (TypeError, ValueError):
+                    pass
+            if is_low:
+                battery_item = dict(item)
+                battery_item["unit"] = attrs.get("unit_of_measurement")
+                low_batteries.append(battery_item)
+
+        if domain in {"sensor", "binary_sensor"}:
+            updated = parse_timestamp(entity.get("last_updated"))
+            if updated and (now - updated).total_seconds() >= 86400:
+                stale_item = dict(item)
+                stale_item["last_updated"] = entity.get("last_updated")
+                stale_sensors.append(stale_item)
+
+        if domain == "automation" and attrs.get("last_triggered"):
+            recent_automations.append(
+                {
+                    "entity_id": entity_id,
+                    "friendly_name": friendly_name,
+                    "last_triggered": attrs.get("last_triggered"),
+                    "state": state,
+                }
+            )
+
+    recent_automations.sort(
+        key=lambda item: str(item.get("last_triggered") or ""), reverse=True
+    )
+
+    return {
+        "_meta": {
+            "generated_at": generated_at,
+            "home_assistant_version": read_ha_version(),
+            "privacy": "Summary built only from the filtered diagnostic entity set",
+        },
+        "summary": {
+            "filtered_entity_count": len(raw_entities),
+            "unavailable_or_unknown_count": len(unavailable),
+            "low_battery_count": len(low_batteries),
+            "stale_sensor_count_24h": len(stale_sensors),
+            "recent_automation_count": len(recent_automations),
+        },
+        "unavailable_or_unknown": unavailable[:50],
+        "low_batteries": low_batteries[:50],
+        "stale_sensors_24h": stale_sensors[:50],
+        "recent_automations": recent_automations[:20],
+    }
+
+
+def write_json_yaml(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: state_snapshot.py OUTPUT_PATH", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print("Usage: state_snapshot.py STATES_OUTPUT HEALTH_OUTPUT", file=sys.stderr)
         return 2
 
     token = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -233,16 +325,14 @@ def main():
         print(f"Unable to read Home Assistant states: {exc}", file=sys.stderr)
         return 1
 
-    entities = [
-        sanitize_entity(entity)
-        for entity in states
-        if is_safe_entity(entity)
-    ]
+    raw_entities = [entity for entity in states if is_safe_entity(entity)]
+    entities = [sanitize_entity(entity) for entity in raw_entities]
     entities.sort(key=lambda item: item.get("entity_id") or "")
 
+    generated_at = datetime.now(timezone.utc).isoformat()
     snapshot = {
         "_meta": {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": generated_at,
             "source": "Home Assistant Core API via Supervisor",
             "privacy": "Filtered diagnostic snapshot; sensitive domains and attributes omitted",
             "home_assistant_version": read_ha_version(),
@@ -252,16 +342,19 @@ def main():
         "entities": entities,
     }
 
-    output_path = sys.argv[1]
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    states_output = sys.argv[1]
+    health_output = sys.argv[2]
+    health = build_health(raw_entities, generated_at)
 
     # JSON is valid YAML 1.2; the .yaml extension is intentional because ordinary
     # JSON files from /config are never backed up.
-    with open(output_path, "w", encoding="utf-8") as handle:
-        json.dump(snapshot, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    write_json_yaml(states_output, snapshot)
+    write_json_yaml(health_output, health)
 
-    print(f"Wrote {len(entities)} filtered entities to {output_path}")
+    print(
+        f"Wrote {len(entities)} filtered entities to {states_output} "
+        f"and health summary to {health_output}"
+    )
     return 0
 
 
