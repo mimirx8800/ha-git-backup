@@ -10,6 +10,7 @@ RUN apk add --no-cache \
     rsync \
     tzdata \
     inotify-tools \
+    curl \
     python3 \
     py3-pip
 
