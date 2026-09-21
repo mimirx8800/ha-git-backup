@@ -356,30 +356,33 @@ load_supervisor_token() {
 generate_state_snapshot() {
     local output="$REPO_DIR/debug/states.yaml"
     local health="$REPO_DIR/debug/health.yaml"
+    local changes="$REPO_DIR/debug/changes.yaml"
     local tmp_output="$REPO_DIR/debug/.states.yaml.tmp"
     local tmp_health="$REPO_DIR/debug/.health.yaml.tmp"
+    local tmp_changes="$REPO_DIR/debug/.changes.yaml.tmp"
 
     mkdir -p "$REPO_DIR/debug"
-    rm -f "$tmp_output" "$tmp_health"
+    rm -f "$tmp_output" "$tmp_health" "$tmp_changes"
 
     if ! load_supervisor_token; then
-        log_warn "SUPERVISOR_TOKEN is unavailable; keeping previous diagnostic snapshot"
+        log_warn "SUPERVISOR_TOKEN is unavailable; keeping previous diagnostic files"
         return 0
     fi
 
     log_info "Generating privacy-filtered Home Assistant diagnostic snapshot..."
-    if python3 /state_snapshot.py "$tmp_output" "$tmp_health"; then
-        if [ -s "$tmp_output" ] && [ -s "$tmp_health" ]; then
+    if python3 /state_snapshot.py "$output" "$tmp_output" "$tmp_health" "$tmp_changes"; then
+        if [ -s "$tmp_output" ] && [ -s "$tmp_health" ] && [ -s "$tmp_changes" ]; then
             mv -f "$tmp_output" "$output"
             mv -f "$tmp_health" "$health"
-            log_info "Diagnostic snapshot updated: debug/states.yaml + debug/health.yaml"
+            mv -f "$tmp_changes" "$changes"
+            log_info "Diagnostics updated: states.yaml + health.yaml + changes.yaml"
         else
-            rm -f "$tmp_output" "$tmp_health"
-            log_warn "Diagnostic snapshot was empty; keeping previous files"
+            rm -f "$tmp_output" "$tmp_health" "$tmp_changes"
+            log_warn "Diagnostic output was incomplete; keeping previous files"
         fi
     else
-        rm -f "$tmp_output" "$tmp_health"
-        log_warn "Diagnostic snapshot generation failed; keeping previous files"
+        rm -f "$tmp_output" "$tmp_health" "$tmp_changes"
+        log_warn "Diagnostic generation failed; keeping previous files"
     fi
 }
 
