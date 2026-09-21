@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.0] - 2026-09-21
+
+### Added
+
+- Manual **ChatGPT Config Deploy** workflow in the add-on Web UI
+- Dedicated `chatgpt-changes` deploy branch support
+- Hard allowlist: only `automations.yaml`, `scripts.yaml`, and `scenes.yaml` can be deployed
+- Fresh pre-deploy Git backup and stale-edit conflict detection
+- Automatic rollback when Home Assistant rejects the configuration
+- Optional automatic reload of automations, scripts, and scenes after a valid deploy
+- Deploy status/preview endpoints and an explicit confirmation before applying changes
+
+### Security
+
+- Deploy is disabled by default
+- File deletion, unexpected files, oversized candidates, credential-like content, and conflicting edits are blocked
+- Every successful deploy is mirrored back to the main backup branch for audit/history
+
 ## [1.0.13] - 2025-01-21
 
 ### Fixed
