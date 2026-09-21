@@ -355,18 +355,78 @@ load_supervisor_token() {
 # ------------------------------------------------------------------------------
 generate_state_snapshot() {
     local output="$REPO_DIR/debug/states.yaml"
+    local health="$REPO_DIR/debug/health.yaml"
+    local tmp_output="$REPO_DIR/debug/.states.yaml.tmp"
+    local tmp_health="$REPO_DIR/debug/.health.yaml.tmp"
+
+    mkdir -p "$REPO_DIR/debug"
+    rm -f "$tmp_output" "$tmp_health"
 
     if ! load_supervisor_token; then
-        log_warn "SUPERVISOR_TOKEN is unavailable; skipping state snapshot"
+        log_warn "SUPERVISOR_TOKEN is unavailable; keeping previous diagnostic snapshot"
         return 0
     fi
 
-    log_info "Generating privacy-filtered Home Assistant state snapshot..."
-    if python3 /state_snapshot.py "$output"; then
-        log_info "State snapshot updated: debug/states.yaml"
+    log_info "Generating privacy-filtered Home Assistant diagnostic snapshot..."
+    if python3 /state_snapshot.py "$tmp_output" "$tmp_health"; then
+        if [ -s "$tmp_output" ] && [ -s "$tmp_health" ]; then
+            mv -f "$tmp_output" "$output"
+            mv -f "$tmp_health" "$health"
+            log_info "Diagnostic snapshot updated: debug/states.yaml + debug/health.yaml"
+        else
+            rm -f "$tmp_output" "$tmp_health"
+            log_warn "Diagnostic snapshot was empty; keeping previous files"
+        fi
     else
-        log_warn "State snapshot generation failed; keeping previous snapshot if present"
+        rm -f "$tmp_output" "$tmp_health"
+        log_warn "Diagnostic snapshot generation failed; keeping previous files"
     fi
+}
+
+# ------------------------------------------------------------------------------
+# Safety gate: never push sensitive, binary or unexpectedly large files
+# ------------------------------------------------------------------------------
+validate_repository_safety() {
+    local failed=0
+    local path
+    local size
+    local max_size=$((2 * 1024 * 1024))
+
+    while IFS= read -r path; do
+        [ -z "$path" ] && continue
+
+        case "$path" in
+            secrets.yaml|*/secrets.yaml|.storage/*|*/.storage/*|zigbee2mqtt/*|*/zigbee2mqtt/*|\
+            custom_components/*|www/*|themes/*|deps/*|.cache/*|*/.cache/*|.cloud/*|*/.cloud/*|\
+            backups/*|backup/*|tts/*|*.db|*.db-shm|*.db-wal|*.log|*.jpg|*.jpeg|*.png|*.gif|\
+            *.webp|*.mp4|*.mp3|*.wav|*.avi|*.mkv|*.pem|*.p12|*.pfx|id_rsa|id_ed25519)
+                log_error "Safety gate blocked forbidden file: $path"
+                failed=1
+                continue
+                ;;
+        esac
+
+        if [ -f "$REPO_DIR/$path" ]; then
+            size=$(stat -c%s "$REPO_DIR/$path" 2>/dev/null || echo 0)
+            if [ "$size" -gt "$max_size" ]; then
+                log_error "Safety gate blocked oversized file: $path ($size bytes)"
+                failed=1
+                continue
+            fi
+
+            if grep -Eaq 'github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' "$REPO_DIR/$path" 2>/dev/null; then
+                log_error "Safety gate found credential-like content in: $path"
+                failed=1
+            fi
+        fi
+    done < <(git ls-files --cached)
+
+    if [ "$failed" -ne 0 ]; then
+        log_error "Backup blocked by repository safety checks"
+        return 1
+    fi
+
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -455,6 +515,7 @@ do_backup() {
         --delete
         --prune-empty-dirs
         --exclude='.git/'
+        --exclude='debug/'
 
         # Sensitive / runtime / bulky directories
         --exclude='secrets.yaml'
@@ -524,6 +585,12 @@ do_backup() {
 
     # Stage all changes
     git add -A
+
+    # Refuse to commit/push anything outside the diagnostic mirror safety rules.
+    if ! validate_repository_safety; then
+        update_status "error" "Backup blocked by safety checks"
+        return 1
+    fi
 
     # Check if there are changes to commit
     if git diff --cached --quiet; then
