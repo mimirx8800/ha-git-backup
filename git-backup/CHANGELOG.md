@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1] - 2026-09-21
+
+### Fixed
+
+- Fetch the `chatgpt-changes` branch into an explicit remote-tracking ref when the local repository was cloned with `--single-branch`
+- Fix false “Deploy branch does not exist” errors in the ChatGPT deploy preview
+
 ## [1.1.0] - 2026-09-21
 
 ### Added
