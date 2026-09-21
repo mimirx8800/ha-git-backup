@@ -1,5 +1,5 @@
 name: Git Config Backup Fixed
-version: "1.0.26"
+version: "1.1.0"
 slug: git_config_backup_fixed
 description: Automatically backup Home Assistant configuration to a Git repository
 url: "https://github.com/mimirx8800/ha-git-backup"
@@ -13,9 +13,10 @@ startup: application
 boot: auto
 init: false
 
-# Map the Home Assistant config directory (read-only for safety)
+# Writable only for the optional, manually confirmed deploy gate.
+# Deploy itself is disabled by default and hard-limited to three YAML files.
 map:
-  - config:ro
+  - config:rw
   - ssl:ro
   - addons:ro
   - share:rw
@@ -40,6 +41,10 @@ options:
   watch_max_interval: 1800
   watch_burst_limit: 5
   cron_schedule: ""
+  deploy_enabled: false
+  deploy_branch: "chatgpt-changes"
+  deploy_require_config_check: true
+  deploy_auto_reload: true
   exclude_patterns:
     - "*.db"
     - "*.db-shm"
@@ -97,6 +102,10 @@ schema:
   watch_max_interval: int(60,3600)
   watch_burst_limit: int(1,50)
   cron_schedule: str?
+  deploy_enabled: bool
+  deploy_branch: str
+  deploy_require_config_check: bool
+  deploy_auto_reload: bool
   exclude_patterns:
     - str
   include_patterns:
