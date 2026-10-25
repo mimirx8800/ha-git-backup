@@ -34,6 +34,8 @@ SAFE_DOMAINS = {
     "water_heater",
 }
 
+V3V_LIGHT_ENTITY_ID = "light.chaufferie_commande_v3v"
+
 SAFE_SENSOR_CLASSES = {
     "temperature",
     "humidity",
@@ -139,6 +141,7 @@ IMPORTANT_ATTRIBUTE_KEYS = {
     "fan_mode",
     "percentage",
     "current_position",
+    "brightness_pct",
 }
 
 NUMERIC_CHANGE_THRESHOLDS = {
@@ -214,6 +217,10 @@ def is_safe_entity(entity):
     domain = entity_id.split(".", 1)[0]
     attrs = entity.get("attributes") or {}
 
+    # Export only the V3V dimmer; all other light entities remain private.
+    if entity_id == V3V_LIGHT_ENTITY_ID:
+        return True
+
     if domain in SAFE_DOMAINS:
         return True
 
@@ -240,6 +247,17 @@ def sanitize_entity(entity):
         for key, value in attrs.items()
         if key in SAFE_ATTRIBUTES
     }
+
+    # brightness is intentionally exported only for the V3V control light.
+    if entity.get("entity_id") == V3V_LIGHT_ENTITY_ID:
+        state = entity.get("state")
+        brightness = attrs.get("brightness")
+        if state == "off":
+            safe_attrs["brightness"] = 0
+            safe_attrs["brightness_pct"] = 0
+        elif state == "on" and isinstance(brightness, (int, float)) and not isinstance(brightness, bool) and 0 <= brightness <= 255:
+            safe_attrs["brightness"] = brightness
+            safe_attrs["brightness_pct"] = round(brightness / 255 * 100, 1)
 
     item = {
         "entity_id": entity.get("entity_id"),
