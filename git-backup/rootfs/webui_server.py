@@ -122,9 +122,10 @@ button:disabled{background:#bbb!important;cursor:not-allowed}
 <div class="card">
 <h2>ChatGPT Config Deploy</h2>
 <p class="info">
-Manual safety gate. Only <code>automations.yaml</code>, <code>scripts.yaml</code> and
-<code>scenes.yaml</code> can be deployed. A fresh backup and Home Assistant configuration
-check are performed before a proposal is accepted.
+Manual safety gate. Only <code>automations.yaml</code>, <code>scripts.yaml</code>,
+<code>scenes.yaml</code> and <code>configuration.yaml</code> can be deployed.
+A fresh backup and Home Assistant configuration check are performed before changes are accepted.
+If <code>configuration.yaml</code> changes, Home Assistant must be restarted manually; no hot reload is attempted.
 </p>
 <div class="status"><div class="dot" id="deployDot"></div><span id="deployText">Loading...</span></div>
 <div class="info" id="deployDetails"></div>
@@ -145,7 +146,7 @@ check are performed before a proposal is accepted.
 function cls(status){
   if(['success','ready','no_changes'].includes(status)) return 'success';
   if(['error','blocked','rolled_back'].includes(status)) return 'error';
-  if(status==='running') return 'running';
+  if(['running','warning','restart_required'].includes(status)) return 'running';
   return 'idle';
 }
 function updateBackup(){
