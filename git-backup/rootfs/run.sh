@@ -624,29 +624,65 @@ do_backup() {
         return 1
     fi
 
-    # Check if there are changes to commit
+    # Commit the Home Assistant snapshot first; this is the authoritative
+    # backup tree. Never force-push and never discard local backup commits.
+    local local_changes=false
     if git diff --cached --quiet; then
-        log_info "No changes to commit"
+        log_info "No local configuration changes to commit"
+    else
+        local_changes=true
+        local date_str
+        date_str=$(date '+%Y-%m-%d %H:%M:%S')
+        local file_summary
+        file_summary=$(generate_file_summary)
+        local message
+        message="$COMMIT_MESSAGE"
+        message="${message//\{date\}/$date_str}"
+        message="${message//\{files\}/$file_summary}"
+
+        log_info "Committing Home Assistant snapshot..."
+        if ! git commit -m "$message"; then
+            update_status "error" "Could not commit the local backup"
+            return 1
+        fi
+    fi
+
+    # GitHub may have advanced because ChatGPT committed proposed YAML
+    # directly. Reconcile *history* while retaining the live HA snapshot
+    # as the backup tree. -s ours is a MERGE, never a force push: the remote
+    # commits remain in ancestry and can still be inspected/recovered.
+    # This is deliberate: main is a snapshot branch, not a deploy branch.
+    log_info "Fetching remote backup history..."
+    if ! git fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"; then
+        update_status "error" "Could not fetch the remote backup branch"
+        return 1
+    fi
+
+    local remote_ref="refs/remotes/origin/$BRANCH"
+    local merged_remote=false
+    if git show-ref --verify --quiet "$remote_ref"; then
+        if ! git merge-base --is-ancestor "$remote_ref" HEAD; then
+            if ! git merge-base HEAD "$remote_ref" >/dev/null 2>&1; then
+                update_status "error" "Remote and local backup histories are unrelated; manual reconciliation required"
+                return 1
+            fi
+
+            log_warn "Remote advanced: preserving both histories; live Home Assistant remains the authoritative backup snapshot"
+            if ! git merge --no-ff --no-edit -s ours "$remote_ref"; then
+                update_status "error" "Could not reconcile backup history without rewriting it"
+                return 1
+            fi
+            merged_remote=true
+        fi
+    fi
+
+    if [ "$local_changes" = "false" ] && [ "$merged_remote" = "false" ]; then
+        log_info "No changes to push"
         update_status "idle" "No changes detected"
         return 0
     fi
 
-    # Create commit message with date and file summary
-    local date_str
-    date_str=$(date '+%Y-%m-%d %H:%M:%S')
-    local file_summary
-    file_summary=$(generate_file_summary)
-    local message
-    message="$COMMIT_MESSAGE"
-    message="${message//\{date\}/$date_str}"
-    message="${message//\{files\}/$file_summary}"
-
-    # Commit
-    log_info "Committing changes..."
-    git commit -m "$message"
-
-    # Push
-    log_info "Pushing to remote..."
+    log_info "Pushing backup to remote (never force)..."
     if git push -u origin "$BRANCH" 2>&1; then
         local last_commit
         last_commit=$(git log -1 --oneline)
@@ -654,8 +690,8 @@ do_backup() {
         update_status "success" "Backup successful" "$last_commit"
         return 0
     else
-        log_error "Failed to push to remote"
-        update_status "error" "Push failed"
+        log_error "Failed to push to remote (check credentials or concurrent GitHub edits)"
+        update_status "error" "Push failed; local backup preserved, remote unchanged"
         return 1
     fi
 }
