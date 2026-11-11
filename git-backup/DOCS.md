@@ -364,11 +364,12 @@ deploy_auto_reload: true
 Deployment is **manual only**. Open the add-on Web UI, use **Preview changes**, then
 explicitly confirm **Apply ChatGPT changes**.
 
-The first version is intentionally limited to:
+The deploy gate permits **only** these four root-level YAML files:
 
 - `automations.yaml`
 - `scripts.yaml`
 - `scenes.yaml`
+- `configuration.yaml`
 
 Before applying anything, the add-on creates a fresh backup of the current Home
 Assistant configuration and checks that none of the proposed files has changed since
@@ -379,3 +380,19 @@ Candidate files are written atomically and Home Assistant's
 the original files are restored immediately. If validation succeeds, the affected
 domains can be reloaded automatically and the accepted files are backed up to the
 normal main branch.
+
+**Special handling for `configuration.yaml`:** validation is mandatory even
+when the general `deploy_require_config_check` option is false. Since integration
+configuration and new MQTT sensors require a Home Assistant Core restart, a deploy
+including `configuration.yaml` **does not hot-reload** automations/scripts/scenes.
+The Web UI reports `restart_required`, and you must restart Home Assistant
+**manually** after inspecting the result. The add-on never initiates the restart.
+
+**If Backup status shows Push failed:** from version 1.1.3 onward, backups fetch
+the latest remote `main` history and, if remote commits have been added
+directly in GitHub, create a *regular merge* that preserves both commit lineages,
+keeping the live Home Assistant files as the authoritative backup snapshot.
+The push is never forced. Do not treat `main` as the deployment proposal branch;
+create proposals on `chatgpt-changes` so they are not superseded by backups.
+If credential/authentication problems persist, inspect the add-on log; a failed
+pre-deploy backup always blocks Apply.
