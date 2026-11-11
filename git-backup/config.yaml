@@ -1,5 +1,5 @@
 name: Git Config Backup Fixed
-version: "1.1.2"
+version: "1.1.3"
 slug: git_config_backup_fixed
 description: Automatically backup Home Assistant configuration to a Git repository
 url: "https://github.com/mimirx8800/ha-git-backup"
@@ -14,7 +14,7 @@ boot: auto
 init: false
 
 # Writable only for the optional, manually confirmed deploy gate.
-# Deploy itself is disabled by default and hard-limited to three YAML files.
+# Deploy stays manual and is hard-limited to four named YAML files.
 map:
   - config:rw
   - ssl:ro
