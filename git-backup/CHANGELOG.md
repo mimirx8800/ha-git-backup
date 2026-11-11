@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.1.3] - 2026-11-11
+
+### Added
+
+- Manual ChatGPT deploy allowlist now also permits `configuration.yaml` (four exact root-level YAML files only).
+- Any change including `configuration.yaml` **always** requires a valid Home Assistant configuration check, even if the general deploy check setting is disabled.
+- Configuration changes are applied atomically with rollback copies; Home Assistant **must be restarted manually** to load new integrations and MQTT sensors. No hot reload of the associated automations is attempted when `configuration.yaml` changes.
+
+### Fixed
+
+- Restore Git backup pushes when GitHub has advanced directly: fetch remote backup history, preserve both commit lineages using a non-force merge that retains the actual Home Assistant snapshot as the backup tree, then push normally.
+- Backup synchronization also runs when the local snapshot has no new file changes, so a diverged GitHub branch is no longer silently mistaken for an up-to-date backup.
+- Web UI clarifies allowed files and highlights `restart_required` status.
+
+### Safety
+
+- No force push, no automatic HA restart, no deployment without an explicit Apply confirmation, and no weakening of existing conflict checks or rollback.
+- A failed pre-deploy backup still blocks deployment. Back up the local HA state before applying any proposed YAML.
+
+
 ## [1.1.1] - 2026-09-21
 
 ### Fixed
