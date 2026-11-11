@@ -54,7 +54,7 @@ lines_to_json_array() {
 
 is_allowed_deploy_file() {
     case "$1" in
-        automations.yaml|scripts.yaml|scenes.yaml)
+        automations.yaml|scripts.yaml|scenes.yaml|configuration.yaml)
             return 0
             ;;
         *)
@@ -315,7 +315,14 @@ do_deploy_apply() {
         mv -f "$tmp_target" "$HA_CONFIG/$file"
     done < <(printf '%s' "$files_json" | jq -r '.[]')
 
-    if [ "$DEPLOY_REQUIRE_CONFIG_CHECK" = "true" ]; then
+    # configuration.yaml loads integrations at Core startup and must not
+    # bypass validation even when checks are disabled for other YAML files.
+    local needs_core_restart=false
+    if printf '%s' "$files_json" | jq -e 'index("configuration.yaml") != null' >/dev/null; then
+        needs_core_restart=true
+    fi
+
+    if [ "$DEPLOY_REQUIRE_CONFIG_CHECK" = "true" ] || [ "$needs_core_restart" = "true" ]; then
         local check_error=""
         if ! check_error=$(homeassistant_config_check); then
             log_error "Home Assistant configuration check failed; rolling back"
@@ -327,7 +334,10 @@ do_deploy_apply() {
     fi
 
     local reload_warning=""
-    if [ "$DEPLOY_AUTO_RELOAD" = "true" ]; then
+    # Do not hot-reload automations when configuration.yaml is included:
+    # new MQTT sensors/integrations do not exist until HA Core restarts.
+    # This prevents running the new V4 against an incomplete sensor set.
+    if [ "$DEPLOY_AUTO_RELOAD" = "true" ] && [ "$needs_core_restart" != "true" ]; then
         local needs_automation=false
         local needs_script=false
         local needs_scene=false
@@ -353,11 +363,17 @@ do_deploy_apply() {
 
     # Preserve the accepted configuration in the normal main backup history.
     if ! do_backup "post_deploy"; then
-        update_deploy_status "warning" "Files were applied and validated, but the post-deploy Git backup failed" "$files_json"
+        if [ "$needs_core_restart" = "true" ]; then
+            update_deploy_status "warning" "Files applied and validated; post-deploy backup failed. Home Assistant restart required for configuration.yaml." "$files_json"
+        else
+            update_deploy_status "warning" "Files were applied and validated, but the post-deploy Git backup failed" "$files_json"
+        fi
         return 0
     fi
 
-    if [ -n "$reload_warning" ]; then
+    if [ "$needs_core_restart" = "true" ]; then
+        update_deploy_status "restart_required" "Files applied, validated and backed up. Restart Home Assistant manually to load configuration.yaml; automations were not hot-reloaded." "$files_json"
+    elif [ -n "$reload_warning" ]; then
         update_deploy_status "warning" "Files were applied and validated; reload warning: $reload_warning" "$files_json"
     else
         update_deploy_status "success" "ChatGPT changes were applied, validated, reloaded and backed up" "$files_json"
